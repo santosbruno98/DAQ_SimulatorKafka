@@ -22,7 +22,9 @@ async def logout(
         if not refresh_token:
             raise UnauthorizedException("Refresh token not found")
 
-        await blacklist_tokens(access_token=access_token, refresh_token=refresh_token, db=db)
+        await blacklist_tokens(
+            access_token=access_token, refresh_token=refresh_token, db=db
+        )
         response.delete_cookie(key="refresh_token")
 
         return {"message": "Logged out successfully"}

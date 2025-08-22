@@ -8,7 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 class UUIDMixin:
     uuid: Mapped[uuid_pkg.UUID] = mapped_column(
-        UUID, primary_key=True, default=uuid_pkg.uuid4, server_default=text("gen_random_uuid()")
+        UUID,
+        primary_key=True,
+        default=uuid_pkg.uuid4,
+        server_default=text("gen_random_uuid()"),
     )
 
 
@@ -17,7 +20,10 @@ class TimestampMixin:
         DateTime, default=datetime.now(UTC), server_default=text("current_timestamp(0)")
     )
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True, onupdate=datetime.now(UTC), server_default=text("current_timestamp(0)")
+        DateTime,
+        nullable=True,
+        onupdate=datetime.now(UTC),
+        server_default=text("current_timestamp(0)"),
     )
 
 

@@ -4,8 +4,18 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.app.api.v1.users import erase_user, patch_user, read_user, read_users, write_user
-from src.app.core.exceptions.http_exceptions import DuplicateValueException, ForbiddenException, NotFoundException
+from src.app.api.v1.users import (
+    erase_user,
+    patch_user,
+    read_user,
+    read_users,
+    write_user,
+)
+from src.app.core.exceptions.http_exceptions import (
+    DuplicateValueException,
+    ForbiddenException,
+    NotFoundException,
+)
 from src.app.schemas.user import UserCreate, UserRead, UserUpdate
 
 
@@ -13,13 +23,17 @@ class TestWriteUser:
     """Test user creation endpoint."""
 
     @pytest.mark.asyncio
-    async def test_create_user_success(self, mock_db, sample_user_data, sample_user_read):
+    async def test_create_user_success(
+        self, mock_db, sample_user_data, sample_user_read
+    ):
         """Test successful user creation."""
         user_create = UserCreate(**sample_user_data)
 
         with patch("src.app.api.v1.users.crud_users") as mock_crud:
             # Mock that email and username don't exist
-            mock_crud.exists = AsyncMock(side_effect=[False, False])  # email, then username
+            mock_crud.exists = AsyncMock(
+                side_effect=[False, False]
+            )  # email, then username
             mock_crud.create = AsyncMock(return_value=Mock(id=1))
             mock_crud.get = AsyncMock(return_value=sample_user_read)
 
@@ -30,7 +44,9 @@ class TestWriteUser:
 
                 assert result == sample_user_read
                 mock_crud.exists.assert_any_call(db=mock_db, email=user_create.email)
-                mock_crud.exists.assert_any_call(db=mock_db, username=user_create.username)
+                mock_crud.exists.assert_any_call(
+                    db=mock_db, username=user_create.username
+                )
                 mock_crud.create.assert_called_once()
 
     @pytest.mark.asyncio
@@ -42,7 +58,9 @@ class TestWriteUser:
             # Mock that email already exists
             mock_crud.exists = AsyncMock(return_value=True)
 
-            with pytest.raises(DuplicateValueException, match="Email is already registered"):
+            with pytest.raises(
+                DuplicateValueException, match="Email is already registered"
+            ):
                 await write_user(Mock(), user_create, mock_db)
 
     @pytest.mark.asyncio
@@ -73,7 +91,10 @@ class TestReadUser:
 
             assert result == sample_user_read
             mock_crud.get.assert_called_once_with(
-                db=mock_db, username=username, is_deleted=False, schema_to_select=UserRead
+                db=mock_db,
+                username=username,
+                is_deleted=False,
+                schema_to_select=UserRead,
             )
 
     @pytest.mark.asyncio
@@ -114,7 +135,9 @@ class TestPatchUser:
     """Test user update endpoint."""
 
     @pytest.mark.asyncio
-    async def test_patch_user_success(self, mock_db, current_user_dict, sample_user_read):
+    async def test_patch_user_success(
+        self, mock_db, current_user_dict, sample_user_read
+    ):
         """Test successful user update."""
         username = current_user_dict["username"]
         sample_user_read.username = username  # Make sure usernames match
@@ -125,13 +148,17 @@ class TestPatchUser:
             mock_crud.exists = AsyncMock(return_value=False)  # No conflicts
             mock_crud.update = AsyncMock(return_value=None)
 
-            result = await patch_user(Mock(), user_update, username, current_user_dict, mock_db)
+            result = await patch_user(
+                Mock(), user_update, username, current_user_dict, mock_db
+            )
 
             assert result == {"message": "User updated"}
             mock_crud.update.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_patch_user_forbidden(self, mock_db, current_user_dict, sample_user_read):
+    async def test_patch_user_forbidden(
+        self, mock_db, current_user_dict, sample_user_read
+    ):
         """Test user update when user tries to update another user."""
         username = "different_user"
         sample_user_read.username = username
@@ -141,14 +168,18 @@ class TestPatchUser:
             mock_crud.get = AsyncMock(return_value=sample_user_read)
 
             with pytest.raises(ForbiddenException):
-                await patch_user(Mock(), user_update, username, current_user_dict, mock_db)
+                await patch_user(
+                    Mock(), user_update, username, current_user_dict, mock_db
+                )
 
 
 class TestEraseUser:
     """Test user deletion endpoint."""
 
     @pytest.mark.asyncio
-    async def test_erase_user_success(self, mock_db, current_user_dict, sample_user_read):
+    async def test_erase_user_success(
+        self, mock_db, current_user_dict, sample_user_read
+    ):
         """Test successful user deletion."""
         username = current_user_dict["username"]
         sample_user_read.username = username
@@ -158,8 +189,12 @@ class TestEraseUser:
             mock_crud.get = AsyncMock(return_value=sample_user_read)
             mock_crud.delete = AsyncMock(return_value=None)
 
-            with patch("src.app.api.v1.users.blacklist_token", new_callable=AsyncMock) as mock_blacklist:
-                result = await erase_user(Mock(), username, current_user_dict, mock_db, token)
+            with patch(
+                "src.app.api.v1.users.blacklist_token", new_callable=AsyncMock
+            ) as mock_blacklist:
+                result = await erase_user(
+                    Mock(), username, current_user_dict, mock_db, token
+                )
 
                 assert result == {"message": "User deleted"}
                 mock_crud.delete.assert_called_once_with(db=mock_db, username=username)
@@ -178,7 +213,9 @@ class TestEraseUser:
                 await erase_user(Mock(), username, current_user_dict, mock_db, token)
 
     @pytest.mark.asyncio
-    async def test_erase_user_forbidden(self, mock_db, current_user_dict, sample_user_read):
+    async def test_erase_user_forbidden(
+        self, mock_db, current_user_dict, sample_user_read
+    ):
         """Test user deletion when user tries to delete another user."""
         username = "different_user"
         sample_user_read.username = username
