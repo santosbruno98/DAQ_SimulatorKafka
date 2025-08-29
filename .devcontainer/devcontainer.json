@@ -1,0 +1,17 @@
+{
+  "name": "DAQ Dev Container",
+  "dockerComposeFile": [
+    "../docker-compose.yml"
+  ],
+  "service": "web",
+  "workspaceFolder": "/code",
+  "settings": {
+    "python.defaultInterpreterPath": "/app/.venv/bin/python"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ],
+  "overrideCommand": false,
+  "remoteUser": "app"
+}

@@ -1,26 +1,29 @@
-version: '3.9'
+networks:
+  kafka-network:
+    driver: bridge
 
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile
-    # -------- replace with comment to run with gunicorn --------
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    # command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
     env_file:
       - ./src/.env
-    # -------- replace with comment if you are using nginx --------
     ports:
       - "8000:8000"
-    # expose:
-    #   - "8000"
     depends_on:
       - db
       - redis
+      - zookeeper
+      - kafka1
+      - kafka2
     volumes:
       - ./src/app:/code/app
       - ./src/.env:/code/.env
+      - C:/Users/santo/Documents/DevOps/DAQ_SIMULATION/2025-04-27_18-31-54/json/acquisition_characteristics.json:/code/data/acquisition_characteristics.json:ro
+    networks:
+      - kafka-network
 
   worker:
     build:
@@ -32,9 +35,13 @@ services:
     depends_on:
       - db
       - redis
+      - kafka1
+      - kafka2
     volumes:
       - ./src/app:/code/app
       - ./src/.env:/code/.env
+    networks:
+      - kafka-network
 
   db:
     image: postgres:13
@@ -42,11 +49,10 @@ services:
       - ./src/.env
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    # -------- replace with comment to run migrations with docker --------
     expose:
       - "5432"
-    # ports:
-    #  - 5432:5432
+    networks:
+      - kafka-network
 
   redis:
     image: redis:alpine
@@ -54,32 +60,89 @@ services:
       - redis-data:/data
     expose:
       - "6379"
+    networks:
+      - kafka-network
+  
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.2.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - kafka-network
 
-  #-------- uncomment to run with pgadmin --------
-  # pgadmin:
-  #   container_name: pgadmin4
-  #   image: dpage/pgadmin4:latest
-  #   restart: always
-  #   ports:
-  #     - "5050:80"
-  #   volumes:
-  #     - pgadmin-data:/var/lib/pgadmin
-  #   env_file:
-  #     - ./src/.env
-  #   depends_on:
-  #     - db
+  kafka1:
+    image: confluentinc/cp-kafka:6.2.0
+    hostname: kafka1
+    container_name: kafka1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 52428800          
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 52428800          
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 5s
+      retries: 10
+    networks:
+      - kafka-network
 
-  #-------- uncomment to run with nginx --------
-  # nginx:
-  #   image: nginx:latest
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - ./default.conf:/etc/nginx/conf.d/default.conf
-  #   depends_on:
-  #     - web
+  kafka2:
+    image: confluentinc/cp-kafka:6.2.0
+    hostname: kafka2
+    container_name: kafka2
+    depends_on:
+      - zookeeper
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 52428800          
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 52428800   
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9093"]
+      interval: 5s
+      retries: 10
+    networks:
+      - kafka-network
 
-  # -------- uncomment to create first superuser --------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092,kafka2:9093
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
   create_superuser:
     build:
       context: .
@@ -92,22 +155,9 @@ services:
     command: python -m src.scripts.create_first_superuser
     volumes:
       - ./src:/code/src
-
-  #-------- uncomment to create first tier --------
-  # create_tier:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #     - ./src/.env
-  #   depends_on:
-  #     - db
-  #     - web
-  #   command: python -m src.scripts.create_first_tier
-  #   volumes:
-  #     - ./src:/code/src
+    networks:
+      - kafka-network
 
 volumes:
-  postgres-data:
   redis-data:
-  #pgadmin-data:
+  postgres-data:
