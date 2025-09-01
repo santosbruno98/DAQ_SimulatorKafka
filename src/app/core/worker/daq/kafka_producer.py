@@ -40,4 +40,7 @@ async def produce_raw() -> None:
             print(f"Error producing data: {e}")
 
 if __name__=="__main__":
-    asyncio.run(produce_raw()) # run the produce_data coroutine
+    try:
+        asyncio.run(produce_raw()) # run the produce_data coroutine
+    except KeyboardInterrupt:
+        print("Kafka producer interrupted and shutting down.")

@@ -59,7 +59,7 @@ async def run() -> None:
             # now accumulated_data.shape == (502,2,5000) -> ready for correlation
             # here you can compute correlation per row/point along time if needed
             # for example, simple placeholder:
-            correlation_placeholder = accumulated_data  # shape (502,2,5000)
+            correlation_placeholder = accumulated_data[0:2, : , :]  # shape (2,2,5000)
             
             # serialize & send
             correlation_bytes: bytes = await asyncio.to_thread(serialize_array, correlation_placeholder)
