@@ -437,16 +437,16 @@ async def run_conversion_service() -> None:
                 conversion_placeholder: np.ndarray = await loop.run_in_executor(
                     process_executor,
                     temperature_humidity_calculation,
-                    data=latest_corr_data,
-                    electrical_data= latest_raw_data[0:2, :],
-                    distance_average= 0,
-                    slope_temperature=1.57,
-                    slope_humidity=0.18,
-                    slope_temperature_fiber_rh=1.39,
-                    points_temperature=points_temperature,
-                    points_humidity=points_humidity,
-                    temperature_sensor_per_point=temperature_sensor_per_point,
-                    humidity_sensor_per_point=humidity_sensor_per_point,
+                    latest_corr_data,
+                    latest_raw_data[0:2, :],
+                    0,
+                    1.57,
+                    0.18,
+                    1.39,
+                    points_temperature,
+                    points_humidity,
+                    temperature_sensor_per_point,
+                    humidity_sensor_per_point,
                 )
 
                 print(f"--- Calculation complete, result shape: {conversion_placeholder.shape} ---")
