@@ -3,7 +3,7 @@
   "dockerComposeFile": [
     "../docker-compose.yml"
   ],
-  "service": "web",
+  "service": "fastapi-boilerplate-web-1",
   "workspaceFolder": "/code",
   "settings": {
     "python.defaultInterpreterPath": "/app/.venv/bin/python"

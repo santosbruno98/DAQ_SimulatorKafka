@@ -11,7 +11,7 @@ from pymongo.errors import PyMongoError, WriteError
 from pymongo.server_api import ServerApi
 from motor.motor_asyncio import AsyncIOMotorClient
 
-
+from typing import Any
 from dotenv import load_dotenv
 import numpy as np
 
@@ -72,7 +72,7 @@ class MongoDB:
         ''' Insert acquisition data into MongoDB collections.'''
         try:
             compressed_trace : bytes = zlib.compress(pickle.dumps(data[0, :]))
-            trace_document : dict[str,str] = {
+            trace_document : dict[str, Any] = {
                 "sweeps_id": sweeps_id,
                 "data": compressed_trace,
             }
