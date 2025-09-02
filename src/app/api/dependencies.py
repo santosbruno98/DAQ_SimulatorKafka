@@ -1,12 +1,12 @@
+import mimetypes
+import os
 from typing import Annotated, Any, cast
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-import os
-import boto3
-import mimetypes
-from botocore.exceptions import BotoCoreError, ClientError
-from dotenv import load_dotenv, dotenv_values
 
 from ..core.config import settings
 from ..core.db.database import async_get_db
@@ -23,7 +23,6 @@ from ..crud.crud_tier import crud_tiers
 from ..crud.crud_users import crud_users
 from ..schemas.rate_limit import RateLimitRead, sanitize_path
 from ..schemas.tier import TierRead
-
 
 logger = logging.getLogger(__name__)
 
@@ -195,31 +194,35 @@ async def upload_file_to_s3(
 
 
 async def get_bucket_size(
-    bucket_name:str,
-    s3_client: Depends(get_s3_client)
-    ) -> dict[str, float]:
-    """ Returns the size of the bucket in GB """
-    
-    bucket_size :float = 0.0
+    bucket_name: str, s3_client: Depends(get_s3_client)
+) -> dict[str, float]:
+    """Returns the size of the bucket in GB"""
+
+    bucket_size: float = 0.0
     try:
         allbuckets = s3_client.list_buckets()
-        print("------------------------BUCKET LISTING--------------------\n %s",allbuckets)
-        if bucket_name not in [bucket['Name'] for bucket in allbuckets['Buckets']]:
-            raise HTTPException(status_code=404, detail=f"Bucket {bucket_name} not found.")
-        s3 = boto3.resource('s3',
+        print(
+            "------------------------BUCKET LISTING--------------------\n %s",
+            allbuckets,
+        )
+        if bucket_name not in [bucket["Name"] for bucket in allbuckets["Buckets"]]:
+            raise HTTPException(
+                status_code=404, detail=f"Bucket {bucket_name} not found."
+            )
+        s3 = boto3.resource(
+            "s3",
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
             region_name=os.getenv("AWS_REGION"),
         )
-        
+
         bucket = s3.Bucket(bucket_name)
         for bucket_obj in bucket.objects.all():
             bucket_size += bucket_obj.size
 
         return {"size_gb": bucket_size / 1024 / 1024 / 1024}
-    
+
     except ClientError as e:
         raise HTTPException(
             status_code=501, detail=f"Failed to get bucket size: {str(e)}"
         ) from e
-        

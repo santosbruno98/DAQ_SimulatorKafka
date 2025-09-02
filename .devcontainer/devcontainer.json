@@ -10,7 +10,8 @@
   },
   "extensions": [
     "ms-python.python",
-    "ms-python.vscode-pylance"
+    "ms-python.vscode-pylance",
+    "ms-ruff.vscode-ruff"
   ],
   "overrideCommand": false,
   "remoteUser": "app"

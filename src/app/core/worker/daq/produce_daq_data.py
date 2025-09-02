@@ -1,13 +1,15 @@
-'''Script to simulate streaming DAQ data by reading from a local JSON file.'''
+"""Script to simulate streaming DAQ data by reading from a local JSON file."""
 
 from __future__ import annotations
-import base64
+
 import asyncio
+import base64
 import json
+import pickle
 import time
 import zlib
-import pickle
-from typing import Any, List, AsyncGenerator
+from typing import Any, AsyncGenerator
+
 import numpy as np
 
 BUCKET_NAME: str = "daqrawdata"
@@ -16,6 +18,7 @@ CHUNK_INTERVAL: float = 15  # seconds between uploads
 SOURCE_FILE: str = "/code/data/acquisition_characteristics.json"
 
 # TODO: make method to query mongodb documents, now is just gonna read a exported query from compass
+
 
 def decompress_to_floats(b64_string: str) -> np.ndarray:
     """
@@ -36,6 +39,7 @@ def decompress_to_floats(b64_string: str) -> np.ndarray:
         return np.ascontiguousarray(arr, dtype=np.float64)
     else:
         raise TypeError(f"Unexpected decompressed type: {type(arr)}")
+
 
 async def stream_raw_data() -> AsyncGenerator[np.ndarray, None]:
     """
@@ -58,13 +62,13 @@ async def stream_raw_data() -> AsyncGenerator[np.ndarray, None]:
 
                     try:
                         doc = json.loads(line)
-                        b64_data :str = doc["data"]["$binary"]["base64"]
-                        data : np.ndarray = await asyncio.to_thread(
+                        b64_data: str = doc["data"]["$binary"]["base64"]
+                        data: np.ndarray = await asyncio.to_thread(
                             decompress_to_floats, b64_data
                         )
-                        
+
                         # TODO: ALSO YIELD ELECTRICAL_DATA LOL
-                        yield data#, electrical_data 
+                        yield data  # , electrical_data
                     except Exception as e:
                         print(f"Warning line {line_num}: {e}")
                         continue
@@ -78,5 +82,3 @@ async def stream_raw_data() -> AsyncGenerator[np.ndarray, None]:
         except Exception as e:
             print(f"Error: {e}")
             break
-
-

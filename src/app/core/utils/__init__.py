@@ -1,1 +1,3 @@
-from .kafka_helper import get_consumer, get_producer, serialize_array, TOPICS , BOOTSTRAP_SERVERS
+from .kafka_helper import BOOTSTRAP_SERVERS, TOPICS, get_consumer
+
+__all__ = ["BOOTSTRAP_SERVERS", "TOPICS", "get_consumer"]
