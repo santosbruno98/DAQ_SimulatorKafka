@@ -4,24 +4,27 @@ Consumes `raw-electrical-data`, `correlation-data`
 and `conversion-data` topics, writes to MongoDB, bucket S3 and redis cache.
 """
 
-import numpy as np
-import os
-import zlib
-import pickle
-import threading
-import aiohttp
 import asyncio
-import aiofiles
+import os
+import pickle
+import tempfile
+import threading
+import time
+import traceback
+import zlib
 from asyncio import Queue
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+
+import aiofiles
+import aiohttp
+import numpy as np
+from bson import ObjectId
 from dotenv import load_dotenv
 from kafka import KafkaConsumer
-from bson import ObjectId
+
 from app.core.db.mongo_db import MongoDB
-from app.core.utils.kafka_helper import get_consumer, TOPICS, BOOTSTRAP_SERVERS
-from datetime import datetime, timezone
-import tempfile
-from concurrent.futures import ThreadPoolExecutor
-import traceback
+from app.core.utils.kafka_helper import BOOTSTRAP_SERVERS, TOPICS, get_consumer
 
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")
@@ -103,15 +106,19 @@ def _create_file_sync(sweeps_id: ObjectId, data: np.ndarray) -> tuple[str, str]:
         timestamp = int(ObjectId(sweeps_id).generation_time.timestamp())
         local_tz = datetime.now().astimezone().tzinfo
         formatted_time = (
-            datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            datetime.fromtimestamp(timestamp, tz=UTC)
             .astimezone(local_tz)
             .strftime("%d-%m-%Y_%H-%M-%S")  # Use underscores for filename safety
         )
 
-        filename = f"raw_data_{formatted_time}_{str(sweeps_id)}.json"
+        folder = "sim-data/acquisitions"
+        filename = f"{folder}/raw_data_{formatted_time}_{str(sweeps_id)}.json"
 
-        # Use temp directory for better performance and cleanup
+        # Ensure local directories exist
         temp_dir = tempfile.gettempdir()
+        full_dir_path = os.path.join(temp_dir, folder)
+        os.makedirs(full_dir_path, exist_ok=True)  # <-- create folders if missing
+
         file_path = os.path.join(temp_dir, filename)
 
         # Prepare data efficiently
@@ -144,18 +151,18 @@ async def _upload_file_async(file_path: str, filename: str) -> None:
     """
     try:
         async with aiohttp.ClientSession() as session:
-            url = f"http://localhost:8000/api/aws/{BUCKET_NAME}/{filename}"
+            url = f"http://localhost:8000/api/aws/{BUCKET_NAME}?file_path={filename}"
 
             # Use multipart form data for file upload
             async with aiofiles.open(file_path, "rb") as f:
                 file_data = await f.read()
 
             data = aiohttp.FormData()
-            data.add_field("file", file_data, filename=filename)
+            data.add_field("file", file_data, filename=os.path.basename(filename))
 
             async with session.post(url, data=data, timeout=30) as response:
+                text = await response.text()
                 if response.status == 200 or response.status == 201:
-                    text = await response.text()
                     result = await response.json()
                     print(f"Successfully uploaded {filename} to S3: {result}")
                 else:
@@ -166,11 +173,11 @@ async def _upload_file_async(file_path: str, filename: str) -> None:
     except Exception as e:
         print(f"Error uploading {filename} to S3: {e}")
     finally:
-        # Clean up temp file
+        # Clean up temp file after a day
         try:
-            # if os.path.exists(file_path):
-            #     os.remove(file_path)
-            #     print(f"Cleaned up temp file: {file_path}")
+            if os.path.isfile(file_path) and time.time() - os.path.getmtime(file_path) > (60 * 60 * 24):
+                os.remove(file_path)
+                print(f"Cleaned up temp file: {file_path}")
             pass
         except Exception as e:
             print(f"Error cleaning up temp file {file_path}: {e}")

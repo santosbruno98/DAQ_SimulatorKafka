@@ -1,9 +1,12 @@
 """Script to connect to Kafka server and get producer and consumer topics."""
 
-import numpy as np
 import pickle
 import zlib
-from kafka import KafkaProducer, KafkaConsumer
+
+import numpy as np
+from kafka import KafkaConsumer, KafkaProducer
+from kafka.admin import KafkaAdminClient, NewPartitions, NewTopic
+from kafka.errors import TopicAlreadyExistsError
 
 BOOTSTRAP_SERVERS: list[str] = ["kafka1:9092", "kafka2:9093"]
 TOPICS: dict[str, str] = {
@@ -37,6 +40,31 @@ def get_producer(bootstrap_servers: list[str] = BOOTSTRAP_SERVERS) -> KafkaProdu
     )
     return producer
 
+def update_topic_partition(topic: str, partition: int, replication_factor: int) -> None:
+    """
+    Update the partition for a given topic.
+
+    Args:
+        topic (str): The topic name.
+        partition (int): The partition number to update.
+    """
+    admin_client = KafkaAdminClient(bootstrap_servers=BOOTSTRAP_SERVERS)
+    topics_list = admin_client.list_topics()
+    if topic in topics_list:
+        metadata = admin_client.describe_topics([topic])
+        current_partitions = metadata[0].get('partitions')
+        if len(current_partitions) < partition:
+            try:
+                admin_client.create_partitions({topic: NewPartitions(total_count = partition)})
+                print(f"Partition for topic '{topic}' updated to {partition}.")
+            except Exception as e:
+                print(f"Failed to update partition for topic '{topic}': {e}")
+    else:
+        try:
+            topic = NewTopic(name=topic, num_partitions=partition, replication_factor=replication_factor)
+            admin_client.create_topics([topic])
+        except TopicAlreadyExistsError as e:
+            print(f"Topic '{topic}' already exists: {e}")
 
 def get_consumer(
     topic: str,

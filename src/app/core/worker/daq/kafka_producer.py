@@ -11,6 +11,7 @@ from app.core.utils.kafka_helper import (
     TOPICS,
     get_producer,
     serialize_array,
+    update_topic_partition,
 )
 
 from .produce_daq_data import stream_raw_data
@@ -22,6 +23,9 @@ async def produce_raw() -> None:
 
     Uses async iteration and sends serialized arrays to the configured topic.
     """
+    update_topic_partition(topic=TOPICS["raw-electrical"], partition= 8, replication_factor= 2)
+    
+    
     producer = get_producer(bootstrap_servers=BOOTSTRAP_SERVERS)
     async for data in stream_raw_data():
         try:

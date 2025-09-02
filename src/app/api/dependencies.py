@@ -5,7 +5,7 @@ from typing import Annotated, Any, cast
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException, Request, UploadFile
+from fastapi import Depends, HTTPException, Request, UploadFile, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
@@ -156,14 +156,11 @@ async def get_s3_client():
 
 async def upload_file_to_s3(
     file: UploadFile,
-    bucket_name: str,
-    s3_client: Depends(get_s3_client),
-    object_name: str | None = None,
+    object_name: str,
+    bucket_name: str = Query(..., description="Full S3 object path including folders"),
+    s3_client: Any = Depends(get_s3_client),
 ) -> dict[str, str]:
     """Uploads a file to an S3 bucket."""
-    if object_name is None:
-        object_name = os.path.basename(file.filename)
-
     try:
         # reset pointer
         file.file.seek(0)

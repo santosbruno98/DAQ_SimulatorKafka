@@ -8,13 +8,14 @@ import json
 import pickle
 import time
 import zlib
-from typing import Any, AsyncGenerator
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 
 BUCKET_NAME: str = "daqrawdata"
 API_GATEWAY_URL: str = "https://plyb1o6d1j.execute-api.eu-west-3.amazonaws.com/dev/"
-CHUNK_INTERVAL: float = 15  # seconds between uploads
+CHUNK_INTERVAL: float = 0.1  # seconds between uploads
 SOURCE_FILE: str = "/code/data/acquisition_characteristics.json"
 
 # TODO: make method to query mongodb documents, now is just gonna read a exported query from compass
@@ -41,7 +42,7 @@ def decompress_to_floats(b64_string: str) -> np.ndarray:
         raise TypeError(f"Unexpected decompressed type: {type(arr)}")
 
 
-async def stream_raw_data() -> AsyncGenerator[np.ndarray, None]:
+async def stream_raw_data() -> Iterator[np.ndarray, None]:
     """
     Async generator that streams decompressed float arrays from a JSON source file.
 
@@ -55,7 +56,7 @@ async def stream_raw_data() -> AsyncGenerator[np.ndarray, None]:
     """
     while True:
         try:
-            with open(SOURCE_FILE, "r", encoding="utf-8") as f:
+            with open(SOURCE_FILE, encoding="utf-8") as f: # mode (r)eading is default
                 for line_num, line in enumerate(f, 1):
                     if not line.strip():
                         continue

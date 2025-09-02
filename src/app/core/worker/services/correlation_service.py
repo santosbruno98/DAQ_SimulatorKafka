@@ -15,6 +15,7 @@ from app.core.utils.kafka_helper import (
     get_consumer,
     get_producer,
     serialize_array,
+    update_topic_partition,
 )
 
 TOPICS_IN: str = TOPICS["raw-electrical"]
@@ -80,6 +81,9 @@ async def run() -> None:
             correlation_bytes: bytes = await asyncio.to_thread(
                 serialize_array, correlation_placeholder
             )
+            
+            update_topic_partition(topic=TOPICS_OUT, partition= 8, replication_factor= 2)
+            
             future = producer.send(TOPICS_OUT, correlation_bytes)
             try:
                 record_metadata = future.get(timeout=10)
