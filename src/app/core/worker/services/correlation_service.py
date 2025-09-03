@@ -37,7 +37,7 @@ accumulated_data: np.ndarray | None = None  # global or enclosing variable
 
 async def run() -> None:
     global accumulated_data
-
+    
     consumer = get_consumer(
         topic=TOPICS_IN,
         bootstrap_servers=BOOTSTRAP_SERVERS,
@@ -58,13 +58,20 @@ async def run() -> None:
             raw_data: np.ndarray = await asyncio.to_thread(
                 deserialize_array, raw_data_bytes
             )
-            print("--- Received raw data ---", raw_data.shape)  # (502,5000)
+            if msg.headers:
+                for k, v in msg.headers:
+                    if k == "sweeps_id":
+                        sweeps_id = v.decode()
+                        break
+            
+            print("--- Received raw data ---", raw_data.shape, sweeps_id)  # (502,5000)
 
             # add time dimension -> (502, 1, 5000)
             raw_data = np.expand_dims(raw_data, axis=1)
 
             if accumulated_data is None:
                 accumulated_data = raw_data  # first message
+                first_sweeps_id = sweeps_id
                 print("--- Accumulated first chunk ---", accumulated_data.shape)
                 continue  # wait for next chunk
 
@@ -77,14 +84,17 @@ async def run() -> None:
             # for example, simple placeholder:
             correlation_placeholder = accumulated_data[0:2, :, :]  # shape (2,2,5000)
 
+            print('Correlation Service [First_sweeps_id]: %s [Sweeps_id]:', first_sweeps_id,sweeps_id)
             # serialize & send
             correlation_bytes: bytes = await asyncio.to_thread(
                 serialize_array, correlation_placeholder
             )
-            
-            update_topic_partition(topic=TOPICS_OUT, partition= 8, replication_factor= 2)
-            
-            future = producer.send(TOPICS_OUT, correlation_bytes)
+            update_topic_partition(topic=TOPICS_OUT, partition=8, replication_factor=2)
+            future = producer.send(
+                TOPICS_OUT,
+                value = correlation_bytes,
+                headers=[("first_sweeps_id", first_sweeps_id.encode()), ("second_sweeps_id", sweeps_id.encode())]
+                )
             try:
                 record_metadata = future.get(timeout=10)
                 print(

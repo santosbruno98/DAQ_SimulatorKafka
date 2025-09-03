@@ -1,8 +1,9 @@
 """
-Conversion service
+Conversion service with Redis join
 
-Consumes `raw-electrical-data` and `correlation-data` topics, performs
-temperature/humidity calculation and publishes results to `conversion-data`.
+Consumes `raw-electrical-data` and `correlation-data` topics, stores raw data
+until correlation data arrives, matches messages by sweeps_id (first or second),
+performs temperature/humidity calculation, and publishes results to `conversion-data`.
 """
 
 from __future__ import annotations
@@ -11,77 +12,80 @@ import asyncio
 import gc
 import os
 import threading
-from asyncio import Queue
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from kafka import KafkaConsumer, KafkaProducer
+from redis import asyncio as aioredis
 
-# Adjust import path to your helper module location
 from app.core.utils.kafka_helper import (
     BOOTSTRAP_SERVERS,
     TOPICS,
     get_consumer,
     get_producer,
     serialize_array,
+    update_topic_partition,
 )
-from app.core.utils.maths.maths import deserialize_array, points_fibers, temperature_humidity_calculation
+from app.core.utils.maths import deserialize_array, points_fibers, temperature_humidity_calculation
 
-# Topic names (from your helper TOPICS dict)
+# -------------------------
+# Topic constants
+# -------------------------
 TOPICS_IN_RAW: str = TOPICS["raw-electrical"]
 TOPICS_IN_CORR: str = TOPICS["correlation"]
 TOPICS_OUT: str = TOPICS["conversion"]
 
+# Redis settings
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+REDIS_TTL: int = 60  # seconds
 
 # -------------------------
 # Kafka consumption helpers
 # -------------------------
-
-
-def _blocking_consumer_loop(
-    consumer: KafkaConsumer, put_coroutine, topic_name: str
-) -> None:
-    """
-    Blocking loop meant to run in a background thread. For each message,
-    schedule `put_coroutine(msg_array)` on the asyncio loop.
-    `put_coroutine` must be a callable that accepts a single argument (the array).
-    """
+def _blocking_consumer_loop(consumer: KafkaConsumer, put_coroutine, topic_name: str) -> None:
+    print(f"--- Starting blocking consumer loop for topic {topic_name} ---")
     try:
         for msg in consumer:
             try:
-                data_bytes: bytes = msg.value
-                arr: np.ndarray = deserialize_array(data_bytes)
-                # put_coroutine is a coroutine function; schedule it on the loop
-                put_coroutine(arr)
+                print(f"[{topic_name}] Message received, size={len(msg.value)} bytes")
+                arr: np.ndarray = deserialize_array(msg.value)
+
+                sweeps_ids: list[str] = []
+                if msg.headers:
+                    print(f"[{topic_name}] Headers: {msg.headers}")
+                    for k, v in msg.headers:
+                        if k in ("first_sweeps_id", "second_sweeps_id"):
+                            sweeps_ids.append(v.decode())
+
+                if not sweeps_ids:
+                    print(f"[{topic_name}] Missing sweeps_id headers, skipping")
+                    continue
+
+                print(f"[{topic_name}] Scheduling message with sweeps_ids={sweeps_ids}")
+                put_coroutine((sweeps_ids, arr, topic_name))
+
             except Exception as e:
-                print(f"Error consuming {topic_name} message: {e}")
+                print(f"[{topic_name}] Error consuming message: {e}")
     except Exception as e:
-        print(f"Blocking consumer loop for {topic_name} exited with error: {e}")
+        print(f"[{topic_name}] Blocking consumer loop exited with error: {e}")
     finally:
-        # ensure consumer closed if thread ends
         try:
             consumer.close()
+            print(f"[{topic_name}] Consumer closed")
         except Exception:
             pass
 
-
 async def consume_to_queue_in_thread(
     consumer: KafkaConsumer,
-    queue: Queue,
+    queue: asyncio.Queue,
     topic_name: str,
     loop: asyncio.AbstractEventLoop,
 ) -> None:
-    """
-    Start a background thread that consumes from blocking KafkaConsumer and
-    pushes messages into an asyncio.Queue.
+    print(f"--- Launching consumer thread for topic {topic_name} ---")
 
-    This function returns immediately after thread startup.
-    """
-
-    # Define how to schedule queue.put on the event loop from the thread
-    def schedule_put(arr: np.ndarray) -> None:
-        # asyncio.run_coroutine_threadsafe returns a concurrent.futures.Future
-        asyncio.run_coroutine_threadsafe(queue.put(arr), loop)
+    def schedule_put(item: tuple[list[str], np.ndarray, str]) -> None:
+        asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+        print(f"[{topic_name}] Item scheduled to queue, sweeps_ids={item[0]}")
 
     thread = threading.Thread(
         target=_blocking_consumer_loop,
@@ -89,194 +93,162 @@ async def consume_to_queue_in_thread(
         daemon=True,
     )
     thread.start()
-    # We return immediately; the thread will keep running and pushing into queue
+    print(f"--- Thread started for {topic_name} ---")
 
+# -------------------------
+# Redis helpers
+# -------------------------
+async def store_raw(redis: aioredis.Redis, sweeps_id: str, arr: np.ndarray) -> None:
+    key = f"sweeps:{sweeps_id}:raw"
+    await redis.set(key, serialize_array(arr), ex=REDIS_TTL)
+    print(f"[Redis] Stored raw for sweeps_id={sweeps_id} under key={key}")
+
+async def fetch_raw(redis: aioredis.Redis, sweeps_id: str) -> np.ndarray | None:
+    key = f"sweeps:{sweeps_id}:raw"
+    data = await redis.get(key)
+    if data is None:
+        print(f"[Redis] No raw found for sweeps_id={sweeps_id}")
+        return None
+    print(f"[Redis] Fetched raw for sweeps_id={sweeps_id}")
+    return deserialize_array(data)
+
+async def delete_raw(redis: aioredis.Redis, sweeps_id: str) -> None:
+    key = f"sweeps:{sweeps_id}:raw"
+    await redis.delete(key)
+    print(f"[Redis] Deleted raw for sweeps_id={sweeps_id}")
+
+# -------------------------
+# Processing
+# -------------------------
+async def process_pair(
+    sweeps_id: str,
+    raw_data: np.ndarray,
+    corr_data: np.ndarray,
+    producer: KafkaProducer,
+    loop: asyncio.AbstractEventLoop,
+    process_executor: ProcessPoolExecutor,
+) -> None:
+    print(f"--- process_pair started for sweeps_id={sweeps_id} ---")
+    try:
+        points_temperature, points_humidity, temperature_sensor_per_point, humidity_sensor_per_point = points_fibers(
+            min_temperature=1743,
+            max_temperature=1929,
+            min_humidity=1556,
+            max_humidity=1742,
+            x_average=0,
+            check_reversed=True,
+            points_sensor={0: (1000, 2000), 1: (2100, 3100)},
+        )
+
+        print(f"[{sweeps_id}] Running temperature/humidity calculation...")
+        result: np.ndarray = await loop.run_in_executor(
+            process_executor,
+            temperature_humidity_calculation,
+            corr_data,
+            raw_data[0:2, :],
+            0, 1.57, 0.18, 1.39,
+            points_temperature,
+            points_humidity,
+            temperature_sensor_per_point,
+            humidity_sensor_per_point,
+        )
+        print(f"[{sweeps_id}] Calculation complete, result shape={result.shape}")
+
+        result_bytes: bytes = await asyncio.to_thread(serialize_array, result)
+        future = producer.send(
+            TOPICS_OUT,
+            key=sweeps_id.encode(),
+            value=result_bytes,
+            headers=[("sweeps_id", sweeps_id.encode())],
+        )
+        record_metadata = future.get(timeout=10)
+        print(f"[Kafka] Produced sweeps_id={sweeps_id} -> topic={record_metadata.topic}, "
+              f"partition={record_metadata.partition}, offset={record_metadata.offset}")
+
+        del raw_data, corr_data, result
+        gc.collect()
+    except Exception as e:
+        print(f"[{sweeps_id}] Error in process_pair: {e}")
 
 # -------------------------
 # Main conversion service
 # -------------------------
-
-
 async def run_conversion_service() -> None:
-    """
-    Main conversion service coroutine.
-
-    - Starts background consumer threads for raw and correlation topics.
-    - Waits for a correlation message, then takes the most recent raw message,
-      runs heavy CPU calculation in a ProcessPoolExecutor and publishes conversion result.
-    """
-    raw_queue: Queue = Queue()
-    corr_queue: Queue = Queue()
-
+    print("--- Starting Conversion Service ---")
+    raw_queue: asyncio.Queue = asyncio.Queue()
+    corr_queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
-    process_executor: ProcessPoolExecutor = ProcessPoolExecutor(
-        max_workers=max(1, os.cpu_count() - 1)
-    )
+    process_executor = ProcessPoolExecutor(max_workers=max(1, os.cpu_count() - 1))
 
-    raw_consumer: KafkaConsumer = get_consumer(
-        topic=TOPICS_IN_RAW,
-        bootstrap_servers=BOOTSTRAP_SERVERS,
-        group_id="conversion-service-group",
-    )
-    corr_consumer: KafkaConsumer = get_consumer(
-        topic=TOPICS_IN_CORR,
-        bootstrap_servers=BOOTSTRAP_SERVERS,
-        group_id="conversion-service-group",
-    )
-    producer: KafkaProducer = get_producer(bootstrap_servers=BOOTSTRAP_SERVERS)
+    raw_consumer = get_consumer(topic=TOPICS_IN_RAW, bootstrap_servers=BOOTSTRAP_SERVERS, group_id="conversion-service-group")
+    corr_consumer = get_consumer(topic=TOPICS_IN_CORR, bootstrap_servers=BOOTSTRAP_SERVERS, group_id="conversion-service-group")
+    
+    producer = get_producer(bootstrap_servers=BOOTSTRAP_SERVERS)
+    update_topic_partition(topic=TOPICS_OUT, partition=8, replication_factor=2)
+    
+    redis = await aioredis.from_url(REDIS_URL, decode_responses=False)
 
-    print("--- Conversion Service Started ---")
-
-    # Start background consumer threads that feed asyncio queues
     await consume_to_queue_in_thread(raw_consumer, raw_queue, "Raw", loop)
     await consume_to_queue_in_thread(corr_consumer, corr_queue, "Correlation", loop)
 
-    print("--- Consumer tasks started, waiting for data ---")
+    print("--- Consumers initialized and running ---")
 
     try:
         while True:
-            # Wait for correlation data first (it's the bottleneck)
-            print("--- Waiting for correlation data ---")
-            latest_corr_data: np.ndarray = await corr_queue.get()
-            print(f"--- Got correlation data: {latest_corr_data.shape} ---")
+            print("--- Waiting for next message from queues ---")
+            done, _ = await asyncio.wait(
+                {asyncio.create_task(raw_queue.get()), asyncio.create_task(corr_queue.get())},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-            # Get the most recent raw data (drain old data if multiple are queued)
-            latest_raw_data: np.ndarray | None = None
-            try:
-                # Get at least one raw data
-                latest_raw_data = await asyncio.wait_for(raw_queue.get(), timeout=5.0)
-                print(f"--- Got raw data: {latest_raw_data.shape} ---")
+            done_task = list(done)[0]
+            sweeps_ids, arr, topic = done_task.result()
+            print(f"[Queue] Got message from topic={topic} with sweeps_ids={sweeps_ids}")
 
-                # Drain queue to keep only the most recent raw data
-                while not raw_queue.empty():
-                    try:
-                        old_raw_data = latest_raw_data
-                        latest_raw_data = raw_queue.get_nowait()
-                        print(
-                            f"--- Updated to newer raw data: {latest_raw_data.shape} ---"
-                        )
-                        del old_raw_data
-                    except asyncio.QueueEmpty:
+            if topic == "Raw":
+                for sid in sweeps_ids:
+                    await store_raw(redis, sid, arr)
+
+            elif topic == "Correlation":
+                matched_raw = None
+                matched_sweeps_id = None
+                for sid in sweeps_ids:
+                    raw = await fetch_raw(redis, sid)
+                    if raw is not None:
+                        matched_raw = raw
+                        matched_sweeps_id = sid
                         break
-
-            except TimeoutError as e:
-                print(
-                    "--- Timeout waiting for raw data, skipping this correlation data ---",
-                )
-                print(e)
-                continue
-
-            try:
-                # Compute points mapping (example values; keep them as in original)
-                (
-                    points_temperature,
-                    points_humidity,
-                    temperature_sensor_per_point,
-                    humidity_sensor_per_point,
-                ) = points_fibers(
-                    min_temperature=1743,
-                    max_temperature=1929,
-                    min_humidity=1556,
-                    max_humidity=1742,
-                    x_average=0,
-                    check_reversed=True,
-                    points_sensor={0: (1000, 2000), 1: (2100, 3100)},
-                )
-
-                print("--- Starting temperature/humidity calculation ---")
-
-                # Offload heavy calculation to a process pool
-                conversion_placeholder: np.ndarray = await loop.run_in_executor(
-                    process_executor,
-                    temperature_humidity_calculation,
-                    latest_corr_data,
-                    latest_raw_data[0:2, :],
-                    0,
-                    1.57,
-                    0.18,
-                    1.39,
-                    points_temperature,
-                    points_humidity,
-                    temperature_sensor_per_point,
-                    humidity_sensor_per_point,
-                )
-
-                print(
-                    f"--- Calculation complete, result shape: {conversion_placeholder.shape} ---"
-                )
-
-                # Serialize (blocking) in separate thread to avoid blocking loop
-                conversion_bytes: bytes = await asyncio.to_thread(
-                    serialize_array, conversion_placeholder
-                )
-
-                # Send via producer (kafka-python send returns a Future)
-                future = producer.send(TOPICS_OUT, value=conversion_bytes)
-                try:
-                    record_metadata = future.get(timeout=10)
-                    print(
-                        f"Message sent to topic {record_metadata.topic}, "
-                    )
-                    print(
-                        f"partition {record_metadata.partition}, offset {record_metadata.offset}"
-                    )
-                except Exception as e:
-                    print(f"Failed to send conversion data: {e}")
-
-                print("----- Produced conversion data to Kafka -----\n")
-
-                # Clean up
-                del latest_raw_data, latest_corr_data, conversion_placeholder
-                gc.collect()
-
-            except Exception as e:
-                print(f"Error processing data: {e}")
-                import traceback
-
-                traceback.print_exc()
-                # Cleanup
-                if "latest_raw_data" in locals():
-                    del latest_raw_data
-                if "latest_corr_data" in locals():
-                    del latest_corr_data
-                gc.collect()
+                if matched_raw is not None:
+                    print(f"[{matched_sweeps_id}] Matching raw found, processing pair")
+                    await delete_raw(redis, matched_sweeps_id)
+                    await process_pair(matched_sweeps_id, matched_raw, arr, producer, loop, process_executor)
+                else:
+                    print(f"No matching raw found yet for correlation, skipping processing")
 
     except KeyboardInterrupt:
         print("--- Conversion service stopping ---")
-    except Exception as e:
-        print(f"Fatal error in conversion service: {e}")
-        import traceback
-
-        traceback.print_exc()
     finally:
-        # Shutdown producer and executor and attempt to close consumers
+        print("--- Cleaning up resources ---")
         try:
             producer.flush()
             producer.close()
         except Exception:
             pass
-
         try:
             process_executor.shutdown(wait=False)
         except Exception:
             pass
-
-        # Consumers are closed inside the blocking threads when they exit;
-        # if they are still open, try to close them:
         try:
             raw_consumer.close()
-        except Exception:
-            pass
-        try:
             corr_consumer.close()
         except Exception:
             pass
-
+        await redis.aclose()
         gc.collect()
-
+        print("--- Conversion service stopped ---")
 
 if __name__ == "__main__":
     try:
         asyncio.run(run_conversion_service())
     except KeyboardInterrupt:
-        print("Conversion service stopped.")
+        print("Conversion service interrupted and stopped.")

@@ -6,6 +6,8 @@ from __future__ import annotations
 #   later is suppose to be replaced by the actual waveform comming from the real daq
 import asyncio
 
+from bson import ObjectId
+
 from app.core.utils.kafka_helper import (
     BOOTSTRAP_SERVERS,
     TOPICS,
@@ -23,7 +25,7 @@ async def produce_raw() -> None:
 
     Uses async iteration and sends serialized arrays to the configured topic.
     """
-    update_topic_partition(topic=TOPICS["raw-electrical"], partition= 8, replication_factor= 2)
+    update_topic_partition(topic=TOPICS["raw-electrical"], partition=8, replication_factor=2)
     
     
     producer = get_producer(bootstrap_servers=BOOTSTRAP_SERVERS)
@@ -31,10 +33,17 @@ async def produce_raw() -> None:
         try:
             print(type(data), "Data received from DAQ stream")
             serialized_data: bytes = serialize_array(data)
+            sweeps_id = ObjectId() # create a new objectId per data yielded from stream_raw_data
+            sweeps_id = str(sweeps_id)
+            print("Kafka Producer [Sweeps_id]", sweeps_id)
             print(type(serialized_data), "Data serialized for Kafka")
             print("\n--Sending to Kafka topic:", TOPICS["raw-electrical"])
             print()
-            future = producer.send(TOPICS["raw-electrical"], value=serialized_data)
+            future = producer.send(
+                TOPICS["raw-electrical"],
+                value=serialized_data,
+                headers=[("sweeps_id", sweeps_id.encode())]
+            )
             try:
                 record_metadata = future.get(timeout=10)
                 print(

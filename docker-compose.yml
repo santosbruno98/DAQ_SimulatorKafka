@@ -59,7 +59,7 @@ services:
     volumes:
       - redis-data:/data
     expose:
-      - "6379"
+      - "6379:6379"
     networks:
       - kafka-network
   

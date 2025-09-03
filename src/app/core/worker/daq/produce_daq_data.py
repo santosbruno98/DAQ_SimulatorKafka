@@ -15,7 +15,7 @@ import numpy as np
 
 BUCKET_NAME: str = "daqrawdata"
 API_GATEWAY_URL: str = "https://plyb1o6d1j.execute-api.eu-west-3.amazonaws.com/dev/"
-CHUNK_INTERVAL: float = 0.1  # seconds between uploads
+CHUNK_INTERVAL: float = 15  # seconds between uploads
 SOURCE_FILE: str = "/code/data/acquisition_characteristics.json"
 
 # TODO: make method to query mongodb documents, now is just gonna read a exported query from compass

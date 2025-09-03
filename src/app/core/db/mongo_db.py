@@ -16,6 +16,7 @@ from pymongo.errors import PyMongoError, WriteError
 from pymongo.server_api import ServerApi
 
 load_dotenv()
+LASER_COLLECTION = os.getenv("LASER_COLLECTION")
 ACQ_COLLECTION = os.getenv("ACQ_COLLECTION")
 CORR_COLLECTION = os.getenv("CORR_COLLECTION")
 CONV_COLLECTION = os.getenv("CONV_COLLECTION")
@@ -74,12 +75,43 @@ class MongoDB:
             return
 
     async def insert_acquisition_data(
-        self, sweeps_id: ObjectId, data: np.ndarray, electrical_data: np.ndarray = None
+        self,
+        sweeps_id: ObjectId,
+        data: np.ndarray,
+        laser_metadata_id: ObjectId,
+        electrical_data: np.ndarray = None
     ):
         """Insert acquisition data into MongoDB collections."""
         try:
+            laser_document = {
+                "laser_metadata_id" : laser_metadata_id,
+                "sweeps_id": sweeps_id,
+                "fiber_t_initial_point" : 1000,
+                "fiber_t_final_point" : 1400,
+                "fiber_rh_initial_point" : 1500,
+                "fiber_rh_final_point" : 1900,
+                "points_sensor" : {"0" : (1000, 2000), "1" : (2100, 3100)},
+                "check_reversed" : True,
+                "slope_temperature" : 1.57,
+                "slope_humidity" : 0.18,
+                "slope_temperature_fiber_rh" : 1.39,
+                "sweeps_mode" : "temperature",
+                "sweeps_mode_initial" : 20,
+                "sweeps_mode_final" : 30,
+                "sweeps_mode_step" : 0.02,
+            }
+            nr_docs = await self.db[LASER_COLLECTION].count_documents(
+                {
+                    'laser_metadata_id': laser_metadata_id, 'sweeps_id': sweeps_id
+                    }
+                )
+            if nr_docs == 0:
+                await self.insert_document(LASER_COLLECTION, laser_document)
+            else:
+                print(f"Laser metadata with sweeps_id {sweeps_id} already exists. Skipping insertion.")
             compressed_trace: bytes = zlib.compress(pickle.dumps(data[0, :]))
             trace_document: dict[str, Any] = {
+                "laser_metadata_id" : laser_metadata_id,
                 "sweeps_id": sweeps_id,
                 "data": compressed_trace,
             }
@@ -91,11 +123,11 @@ class MongoDB:
                 )
 
                 electrical_document = {
+                    "laser_metadata_id" : laser_metadata_id,
                     "sweeps_id": sweeps_id,
                     "data": compresses_electrical_data,
                 }
                 await self.insert_document(ELEC_COLLECTION, electrical_document)
-
         except PyMongoError as e:
             print(f"Error inserting acquisition data: {str(e)}")
             return

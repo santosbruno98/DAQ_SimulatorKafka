@@ -1,7 +1,7 @@
 """
 Writer service
 Consumes `raw-electrical-data`, `correlation-data`
-and `conversion-data` topics, writes to MongoDB, bucket S3 and redis cache.
+and `conversion-data` topics, writes to MongoDB, bucket S3.
 """
 
 import asyncio
@@ -29,7 +29,7 @@ from app.core.utils.kafka_helper import BOOTSTRAP_SERVERS, TOPICS, get_consumer
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")
 BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
-
+LASER_METADATA_ID = os.getenv("LASER_METADATA_ID")
 # Global upload queue and executor for background uploads
 upload_queue = Queue()
 upload_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="s3-upload")
@@ -124,14 +124,13 @@ def _create_file_sync(sweeps_id: ObjectId, data: np.ndarray) -> tuple[str, str]:
         # Prepare data efficiently
         compressed_waveform = zlib.compress(pickle.dumps(data))
         acquisition_document = {
-            "sweeps_id": str(sweeps_id),  # Convert ObjectId to string for JSON
-            "data": compressed_waveform.hex(),  # Convert bytes to hex string for JSON
+            "sweeps_id": sweeps_id,
+            "data": compressed_waveform,
             "timestamp": formatted_time,
             "shape": data.shape,
             "dtype": str(data.dtype),
         }
 
-        # Write as binary pickle (faster than JSON for large data)
         serialized_doc = pickle.dumps(acquisition_document)
 
         with open(file_path, "wb") as f:
@@ -213,7 +212,15 @@ async def writer_task(queue: Queue, func, topic_name: str):
         try:
             data = await queue.get()
             sweeps_id = ObjectId()  # generate new id for each message
-            await func(sweeps_id=sweeps_id, data=data)
+            if func.__name__ == "insert_acquisition_data":
+                await func(
+                    sweeps_id=sweeps_id,
+                    data=data,
+                    laser_metadata_id = ObjectId(LASER_METADATA_ID),
+                    electrical_data = data[0 : 2, 0 : 2]
+                )
+            else:
+                await func(sweeps_id=sweeps_id, data=data)
             print(f"--- {topic_name} data processed --- {data.shape}")
         except Exception as e:
             print(f"Error processing {topic_name} data: {e}")
@@ -231,19 +238,6 @@ async def s3_writer_task(queue: Queue, topic_name: str):
             print(f"--- {topic_name} S3 upload scheduled --- {data.shape}")
         except Exception as e:
             print(f"Error scheduling S3 upload for {topic_name}: {e}")
-
-
-# TODO: REDIS functions
-async def update_redis_cache(sweeps_id: ObjectId, data: np.ndarray):
-    """Update Redis with latest data summary/metadata."""
-    # Example: Store data shape, timestamp, and summary statistics
-    try:
-        # This would be your Redis update logic
-        print(f"Redis cache updated for {sweeps_id}: shape={data.shape}")
-        pass
-    except Exception as e:
-        print(f"Error updating Redis: {e}")
-
 
 # -------------------------
 # Main service
@@ -279,10 +273,10 @@ async def run_writer_service():
     try:
         # Start async tasks
         await asyncio.gather(
-            s3_writer_task(raw_queue, "Raw-S3"),  # Fast S3 uploads for raw data
+            s3_writer_task(raw_queue, "Raw-S3"),
+            writer_task(raw_queue, mongo_db.insert_acquisition_data, "Raw-Mongo"),
             writer_task(corr_queue, mongo_db.insert_correlation_data, "Correlation"),
             writer_task(conv_queue, mongo_db.insert_conversion_data, "Conversion"),
-            # writer_task(raw_queue, update_redis_cache, "Redis"),  # Uncomment when Redis is ready
         )
     except KeyboardInterrupt:
         print("--- Writer service stopping ---")
