@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import pickle
-import time
 import zlib
 from collections.abc import Iterator
 from typing import Any
@@ -15,10 +14,9 @@ import numpy as np
 
 BUCKET_NAME: str = "daqrawdata"
 API_GATEWAY_URL: str = "https://plyb1o6d1j.execute-api.eu-west-3.amazonaws.com/dev/"
-CHUNK_INTERVAL: float = 15  # seconds between uploads
-SOURCE_FILE: str = "/code/data/acquisition_characteristics.json"
-
-# TODO: make method to query mongodb documents, now is just gonna read a exported query from compass
+CHUNK_INTERVAL: float = 60  # seconds between uploads
+SOURCE_FILE_1: str = "/code/data/acquisition_characteristics.json"
+SOURCE_FILE_2: str = "/code/data/electrical_sensors.json"
 
 
 def decompress_to_floats(b64_string: str) -> np.ndarray:
@@ -56,27 +54,33 @@ async def stream_raw_data() -> Iterator[np.ndarray, None]:
     """
     while True:
         try:
-            with open(SOURCE_FILE, encoding="utf-8") as f: # mode (r)eading is default
-                for line_num, line in enumerate(f, 1):
-                    if not line.strip():
+            with (
+                open(SOURCE_FILE_1, encoding="utf-8") as f1,
+                open(SOURCE_FILE_2, encoding="utf-8") as f2,
+            ):
+                for line_num, (line1, line2) in enumerate(zip(f1, f2), 1):
+                    if not line1.strip() or not line2.strip():
                         continue
-
                     try:
-                        doc = json.loads(line)
-                        b64_data: str = doc["data"]["$binary"]["base64"]
+                        doc1 = json.loads(line1)
+                        b64_data: str = doc1["data"]["$binary"]["base64"]
                         data: np.ndarray = await asyncio.to_thread(
                             decompress_to_floats, b64_data
                         )
 
-                        # TODO: ALSO YIELD ELECTRICAL_DATA LOL
-                        yield data  # , electrical_data
+                        doc2 = json.loads(line2)
+                        b64_elec_data: str = doc2["data"]["$binary"]["base64"]
+                        elec_data: np.ndarray = await asyncio.to_thread(
+                            decompress_to_floats, b64_elec_data
+                        )
+
+                        yield data, elec_data
+
                     except Exception as e:
                         print(f"Warning line {line_num}: {e}")
                         continue
 
-                    print(f"Waiting {CHUNK_INTERVAL}s before next upload...")
-                    time.sleep(CHUNK_INTERVAL)
-
+                    await asyncio.sleep(CHUNK_INTERVAL)
         except KeyboardInterrupt:
             print("\nStopping...")
             break

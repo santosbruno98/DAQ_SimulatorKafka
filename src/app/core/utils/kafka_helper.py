@@ -17,7 +17,7 @@ TOPICS: dict[str, str] = {
 
 
 # C:\Users\santo\Documents\DevOps\DAQ_SIMULATION\
-    # test-serverless-upload-s3\FastAPI-boilerplate\src\app\core\utils\kafka.py
+# test-serverless-upload-s3\FastAPI-boilerplate\src\app\core\utils\kafka.py
 def get_producer(bootstrap_servers: list[str] = BOOTSTRAP_SERVERS) -> KafkaProducer:
     """
     Create a Kafka producer connected to the cluster.
@@ -40,6 +40,7 @@ def get_producer(bootstrap_servers: list[str] = BOOTSTRAP_SERVERS) -> KafkaProdu
     )
     return producer
 
+
 def update_topic_partition(topic: str, partition: int, replication_factor: int) -> None:
     """
     Update the partition for a given topic.
@@ -52,19 +53,26 @@ def update_topic_partition(topic: str, partition: int, replication_factor: int) 
     topics_list = admin_client.list_topics()
     if topic in topics_list:
         metadata = admin_client.describe_topics([topic])
-        current_partitions = metadata[0].get('partitions')
+        current_partitions = metadata[0].get("partitions")
         if len(current_partitions) < partition:
             try:
-                admin_client.create_partitions({topic: NewPartitions(total_count = partition)})
+                admin_client.create_partitions(
+                    {topic: NewPartitions(total_count=partition)}
+                )
                 print(f"Partition for topic '{topic}' updated to {partition}.")
             except Exception as e:
                 print(f"Failed to update partition for topic '{topic}': {e}")
     else:
         try:
-            topic = NewTopic(name=topic, num_partitions=partition, replication_factor=replication_factor)
+            topic = NewTopic(
+                name=topic,
+                num_partitions=partition,
+                replication_factor=replication_factor,
+            )
             admin_client.create_topics([topic])
         except TopicAlreadyExistsError as e:
             print(f"Topic '{topic}' already exists: {e}")
+
 
 def get_consumer(
     topic: str,

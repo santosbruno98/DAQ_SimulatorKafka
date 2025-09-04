@@ -1,11 +1,13 @@
+import gzip
 import mimetypes
 import os
+from io import BytesIO
 from typing import Annotated, Any, cast
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException, Request, UploadFile, Query
+from fastapi import Depends, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
@@ -223,3 +225,12 @@ async def get_bucket_size(
         raise HTTPException(
             status_code=501, detail=f"Failed to get bucket size: {str(e)}"
         ) from e
+
+
+def _compress_bytes(file_bytes: bytes) -> BytesIO:
+    """CPU-bound compression logic, safe to run in thread."""
+    compressed_buffer = BytesIO()
+    with gzip.GzipFile(filename=None, mode="wb", fileobj=compressed_buffer) as gz:
+        gz.write(file_bytes)
+    compressed_buffer.seek(0)
+    return compressed_buffer

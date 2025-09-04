@@ -4,11 +4,16 @@ publishes results to 'correlation-data' topic.
 """
 
 import asyncio
+import os
 import pickle
 import zlib
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
+from bson import ObjectId
+from dotenv import load_dotenv
 
+from app.core.db.mongo_db import MongoDB
 from app.core.utils.kafka_helper import (
     BOOTSTRAP_SERVERS,
     TOPICS,
@@ -17,9 +22,18 @@ from app.core.utils.kafka_helper import (
     serialize_array,
     update_topic_partition,
 )
+from app.core.utils.maths import (
+    frequency_axis_laser,
+    moving_correlation_with_peak_finding,
+    moving_cumulative_calculation,
+)
 
 TOPICS_IN: str = TOPICS["raw-electrical"]
 TOPICS_OUT: str = TOPICS["correlation"]
+load_dotenv()
+
+LASER_METADATA_ID = os.getenv("LASER_METADATA_ID")
+DB_NAME = os.getenv("DB_NAME")
 
 
 def deserialize_array(data: bytes) -> np.ndarray:
@@ -37,7 +51,10 @@ accumulated_data: np.ndarray | None = None  # global or enclosing variable
 
 async def run() -> None:
     global accumulated_data
-    
+    db = MongoDB(DB_NAME)
+    loop = asyncio.get_running_loop()
+    process_executor = ProcessPoolExecutor(max_workers=os.cpu_count())
+
     consumer = get_consumer(
         topic=TOPICS_IN,
         bootstrap_servers=BOOTSTRAP_SERVERS,
@@ -54,6 +71,20 @@ async def run() -> None:
 
     for msg in consumer:
         try:
+            msg_type: str | None = None
+            sweeps_id: str | None = None
+            if msg.headers:
+                for key, value in msg.headers:
+                    if key == "type":
+                        msg_type = value.decode()
+                    if key == "sweeps_id":
+                        sweeps_id = value.decode()
+
+            if msg_type != "raw":
+                continue
+            moving_cumulative_last: int = 0
+            ti: int = 0
+            tf: int = 0
             raw_data_bytes: bytes = msg.value
             raw_data: np.ndarray = await asyncio.to_thread(
                 deserialize_array, raw_data_bytes
@@ -63,7 +94,6 @@ async def run() -> None:
                     if k == "sweeps_id":
                         sweeps_id = v.decode()
                         break
-            
             print("--- Received raw data ---", raw_data.shape, sweeps_id)  # (502,5000)
 
             # add time dimension -> (502, 1, 5000)
@@ -73,41 +103,126 @@ async def run() -> None:
                 accumulated_data = raw_data  # first message
                 first_sweeps_id = sweeps_id
                 print("--- Accumulated first chunk ---", accumulated_data.shape)
+
                 continue  # wait for next chunk
-
-            # stack along time axis -> (502,2,5000)
+            tf += np.array(accumulated_data).shape[1]
             accumulated_data = np.concatenate([accumulated_data, raw_data], axis=1)
-            print("--- Accumulated two chunks ---", accumulated_data.shape)
+            size = tf - ti
 
-            # now accumulated_data.shape == (502,2,5000) -> ready for correlation
-            # here you can compute correlation per row/point along time if needed
-            # for example, simple placeholder:
-            correlation_placeholder = accumulated_data[0:2, :, :]  # shape (2,2,5000)
+            print("--- Accumulated chunks ---", accumulated_data.shape)
 
-            print('Correlation Service [First_sweeps_id]: %s [Sweeps_id]:', first_sweeps_id,sweeps_id)
+            (
+                sweeps_mode,
+                sweeps_mode_initial,
+                sweeps_mode_final,
+                sweeps_mode_step,
+                current_frequency_step_a,
+                current_frequency_step_b,
+                temperature_frequency_step,
+                fiber_t_initial_point,
+                fiber_t_final_point,
+                fiber_rh_initial_point,
+                fiber_rh_final_point,
+            ) = await db.get_acquisition_characteristics(
+                laser_metadata_id=ObjectId(LASER_METADATA_ID)
+            )
+            print(
+                (
+                    sweeps_mode,
+                    sweeps_mode_initial,
+                    sweeps_mode_final,
+                    sweeps_mode_step,
+                    current_frequency_step_a,
+                    current_frequency_step_b,
+                    temperature_frequency_step,
+                    fiber_t_initial_point,
+                    fiber_t_final_point,
+                    fiber_rh_initial_point,
+                    fiber_rh_final_point,
+                )
+            )
+            frequency_axis = await asyncio.to_thread(
+                frequency_axis_laser,
+                sweeps_mode,
+                sweeps_mode_initial,
+                sweeps_mode_final,
+                sweeps_mode_step,
+                current_frequency_step_a,
+                current_frequency_step_b,
+                temperature_frequency_step,
+            )
+
+            moving_cumulative: np.ndarray = np.empty(
+                shape=(1, size, accumulated_data.shape[2]),
+                dtype=np.float32,
+            )
+            print(
+                "moving_cumulative shape before going to method",
+                moving_cumulative.shape,
+            )
+            moving_data: np.ndarray = np.empty(
+                (2, size, accumulated_data.shape[2]),
+                dtype=np.float32,
+            )
+
+            moving_frequency_shift_peaks: np.ndarray = (
+                moving_correlation_with_peak_finding(
+                    data=accumulated_data,
+                    frequency_axis=frequency_axis,
+                    smooth_window=10,
+                )
+            )
+
+            moving_cumulative = await loop.run_in_executor(
+                process_executor,
+                moving_cumulative_calculation,
+                moving_frequency_shift_peaks,
+                moving_cumulative,
+                moving_cumulative_last,
+                fiber_t_initial_point,
+                fiber_t_final_point,
+                fiber_rh_initial_point,
+                fiber_rh_final_point,
+                -1,
+            )
+            print(
+                "moving_cumulative shape AFTER going to method", moving_cumulative.shape
+            )
+            moving_cumulative_last: np.ndarray = moving_cumulative[
+                :, moving_cumulative.shape[1] - 1, :
+            ]
+
+            moving_data[0, :, :]: np.ndarray = moving_cumulative
+            moving_data[1, :, :]: np.ndarray = moving_frequency_shift_peaks
+
+            print("SHAPE OF CORRELATION", moving_data.shape)
+            print(
+                "Correlation Service [First_sweeps_id]: %s [Sweeps_id]:",
+                first_sweeps_id,
+                sweeps_id,
+            )
             # serialize & send
             correlation_bytes: bytes = await asyncio.to_thread(
-                serialize_array, correlation_placeholder
+                serialize_array, moving_data
             )
+            del moving_data
             update_topic_partition(topic=TOPICS_OUT, partition=8, replication_factor=2)
             future = producer.send(
                 TOPICS_OUT,
-                value = correlation_bytes,
-                headers=[("first_sweeps_id", first_sweeps_id.encode()), ("second_sweeps_id", sweeps_id.encode())]
-                )
+                value=correlation_bytes,
+                headers=[
+                    ("first_sweeps_id", first_sweeps_id.encode()),
+                    ("second_sweeps_id", sweeps_id.encode()),
+                ],
+            )
             try:
                 record_metadata = future.get(timeout=10)
                 print(
                     f"Message sent to topic {record_metadata.topic}, partition {record_metadata.partition}, "
                 )
-                print(
-                    f"offset {record_metadata.offset}"
-                )
+                print(f"offset {record_metadata.offset}")
             except Exception as e:
                 print(f"Failed to send correlation data: {e}")
-
-            # reset accumulator for next pair
-            accumulated_data = None
 
         except Exception as e:
             print(f"Error processing message: {e}")

@@ -22,6 +22,7 @@ services:
       - ./src/app:/code/app
       - ./src/.env:/code/.env
       - C:/Users/santo/Documents/DevOps/DAQ_SIMULATION/2025-04-27_18-31-54/json/acquisition_characteristics.json:/code/data/acquisition_characteristics.json:ro
+      - C:/Users/santo/Documents/DevOps/DAQ_SIMULATION/2025-04-27_18-31-54/json/electrical_sensors.json:/code/data/electrical_sensors.json:ro
     networks:
       - kafka-network
 
