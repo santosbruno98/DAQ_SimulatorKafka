@@ -95,15 +95,11 @@ async def run() -> None:
                         sweeps_id = v.decode()
                         break
             print("--- Received raw data ---", raw_data.shape, sweeps_id)  # (502,5000)
-
-            # add time dimension -> (502, 1, 5000)
             raw_data = np.expand_dims(raw_data, axis=1)
 
             if accumulated_data is None:
                 accumulated_data = raw_data  # first message
-                first_sweeps_id = sweeps_id
                 print("--- Accumulated first chunk ---", accumulated_data.shape)
-
                 continue  # wait for next chunk
             tf += np.array(accumulated_data).shape[1]
             accumulated_data = np.concatenate([accumulated_data, raw_data], axis=1)
@@ -126,21 +122,6 @@ async def run() -> None:
             ) = await db.get_acquisition_characteristics(
                 laser_metadata_id=ObjectId(LASER_METADATA_ID)
             )
-            print(
-                (
-                    sweeps_mode,
-                    sweeps_mode_initial,
-                    sweeps_mode_final,
-                    sweeps_mode_step,
-                    current_frequency_step_a,
-                    current_frequency_step_b,
-                    temperature_frequency_step,
-                    fiber_t_initial_point,
-                    fiber_t_final_point,
-                    fiber_rh_initial_point,
-                    fiber_rh_final_point,
-                )
-            )
             frequency_axis = await asyncio.to_thread(
                 frequency_axis_laser,
                 sweeps_mode,
@@ -155,10 +136,6 @@ async def run() -> None:
             moving_cumulative: np.ndarray = np.empty(
                 shape=(1, size, accumulated_data.shape[2]),
                 dtype=np.float32,
-            )
-            print(
-                "moving_cumulative shape before going to method",
-                moving_cumulative.shape,
             )
             moving_data: np.ndarray = np.empty(
                 (2, size, accumulated_data.shape[2]),
@@ -185,9 +162,6 @@ async def run() -> None:
                 fiber_rh_final_point,
                 -1,
             )
-            print(
-                "moving_cumulative shape AFTER going to method", moving_cumulative.shape
-            )
             moving_cumulative_last: np.ndarray = moving_cumulative[
                 :, moving_cumulative.shape[1] - 1, :
             ]
@@ -195,10 +169,8 @@ async def run() -> None:
             moving_data[0, :, :]: np.ndarray = moving_cumulative
             moving_data[1, :, :]: np.ndarray = moving_frequency_shift_peaks
 
-            print("SHAPE OF CORRELATION", moving_data.shape)
             print(
-                "Correlation Service [First_sweeps_id]: %s [Sweeps_id]:",
-                first_sweeps_id,
+                "Correlation Service [Sweeps_id]:",
                 sweeps_id,
             )
             # serialize & send
@@ -206,12 +178,11 @@ async def run() -> None:
                 serialize_array, moving_data
             )
             del moving_data
-            update_topic_partition(topic=TOPICS_OUT, partition=8, replication_factor=2)
+            update_topic_partition(topic=TOPICS_OUT, partition=50, replication_factor=2)
             future = producer.send(
                 TOPICS_OUT,
                 value=correlation_bytes,
                 headers=[
-                    ("first_sweeps_id", first_sweeps_id.encode()),
                     ("second_sweeps_id", sweeps_id.encode()),
                 ],
             )

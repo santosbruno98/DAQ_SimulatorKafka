@@ -28,7 +28,7 @@ async def produce_raw() -> None:
     Uses async iteration and sends serialized arrays to the configured topic.
     """
     update_topic_partition(
-        topic=TOPICS["raw-electrical"], partition=8, replication_factor=2
+        topic=TOPICS["raw-electrical"], partition=50, replication_factor=2
     )
 
     producer = get_producer(bootstrap_servers=BOOTSTRAP_SERVERS)

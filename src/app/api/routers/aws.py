@@ -35,8 +35,8 @@ router = APIRouter(tags=["aws_router"])
     status_code=201,
     summary="Upload a file to S3",
     description="Uploads a file to the specified S3 bucket. "
-                "The file is compressed with gzip, original extension is removed, "
-                "and '.gz' is appended."
+    "The file is compressed with gzip, original extension is removed, "
+    "and '.gz' is appended.",
 )
 async def upload_s3(
     bucket_name: str,
@@ -81,7 +81,7 @@ async def upload_s3(
     dependencies=[Depends(get_s3_client)],
     status_code=201,
     summary="Get S3 bucket size",
-    description="Returns the total size of the specified S3 bucket in bytes."
+    description="Returns the total size of the specified S3 bucket in bytes.",
 )
 async def bucket_size(
     bucket_name: str,
