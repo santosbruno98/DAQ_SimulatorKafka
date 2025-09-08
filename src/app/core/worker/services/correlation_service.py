@@ -146,7 +146,7 @@ async def run() -> None:
                 moving_correlation_with_peak_finding(
                     data=accumulated_data,
                     frequency_axis=frequency_axis,
-                    smooth_window=10,
+                    smooth_window=5,
                 )
             )
 
@@ -160,7 +160,7 @@ async def run() -> None:
                 fiber_t_final_point,
                 fiber_rh_initial_point,
                 fiber_rh_final_point,
-                -1,
+                1,
             )
             moving_cumulative_last: np.ndarray = moving_cumulative[
                 :, moving_cumulative.shape[1] - 1, :
