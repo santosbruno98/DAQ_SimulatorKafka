@@ -130,6 +130,7 @@ def _create_file_sync(
 async def _upload_file_async(file_path: str, filename: str) -> None:
     """Asynchronously upload file to S3 via API call."""
     try:
+        session_timeout =   aiohttp.ClientTimeout(total=None,sock_connect=300,sock_read=300)
         async with aiohttp.ClientSession() as session:
             url = f"http://localhost:8000/api/aws/{BUCKET_NAME}?file_path={filename}"
 
@@ -139,7 +140,7 @@ async def _upload_file_async(file_path: str, filename: str) -> None:
             data = aiohttp.FormData()
             data.add_field("file", file_data, filename=os.path.basename(filename))
 
-            async with session.post(url, data=data, timeout=300) as response:
+            async with session.post(url, data=data, timeout=session_timeout) as response:
                 text = await response.text()
                 if response.status in (200, 201):
                     result = await response.json()
